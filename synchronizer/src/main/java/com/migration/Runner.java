@@ -14,7 +14,9 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * Runs different commands related to synchronization of database
@@ -261,27 +263,38 @@ public class Runner {
 
             for (String table : syncTables) {
 
+                table = table.trim();
                 String sourceTable = sourceDatabaseName + "." + table;
 
                 statement = dbConnection.createStatement();
                 query = "SELECT COLUMN_NAME,COLUMN_TYPE FROM information_schema.COLUMNS WHERE "
                         + "COLUMN_KEY ='PRI' AND TABLE_SCHEMA = '" + sourceDatabaseName
-                        + "' AND TABLE_NAME = '" + table + "' LIMIT 1";
+                        + "' AND TABLE_NAME = '" + table + "'";
                 resultSet = statement.executeQuery(query);
-                resultSet.next();
                 log.info(String.format("Query: [%s] ", query));
 
-                String primeryCol = resultSet.getString(COLUMN_NAME);
-                String primeryColType = resultSet.getString(COLUMN_TYPE);
+                String primaryKeyStatement = "";
+                List<String> primaryKeys = new ArrayList();
+                while (resultSet.next()) {
+
+                    String primaryCol = resultSet.getString(COLUMN_NAME);
+                    String primaryColType = resultSet.getString(COLUMN_TYPE);
+                    primaryKeys.add(primaryCol);
+                    primaryKeyStatement += primaryCol + " " + primaryColType + " NOT NULL, ";
+
+                }
+
+                log.info("Primary key statement: " + primaryKeyStatement);
 
                 query = "DROP TABLE IF EXISTS " + sourceTable + "_SYNC;";
                 preparedStatement = dbConnection.prepareStatement(query);
                 preparedStatement.execute();
                 log.info(String.format("Query: [%s] ", query));
 
-                query = "CREATE TABLE " + sourceTable + "_SYNC ( SYNC_ID INT NOT NULL AUTO_INCREMENT," +
-                        " " + primeryCol + " " + primeryColType + " NOT NULL, PRIMARY KEY (SYNC_ID)" +
+                query = "CREATE TABLE " + sourceTable + "_SYNC ( SYNC_ID INT NOT NULL AUTO_INCREMENT, " +
+                        primaryKeyStatement + " PRIMARY KEY (SYNC_ID)" +
                         ") ENGINE=InnoDB DEFAULT CHARSET=latin1;";
+
                 preparedStatement = dbConnection.prepareStatement(query);
                 preparedStatement.execute();
                 log.info(String.format("Query: [%s] ", query));
@@ -296,11 +309,17 @@ public class Runner {
                 preparedStatement.execute();
                 log.info(String.format("Query: [%s] ", query));
 
+                String syncColumns = String.join(", ", primaryKeys);
+
+                List<String> transformedPrimaryKeys = primaryKeys.stream().map(s -> "NEW." + s).collect(
+                        Collectors.toList());
+                String syncValueColumns = String.join(", ", transformedPrimaryKeys);
+
                 query = "CREATE TRIGGER " + table + "_SYNC_INSERT_TRIGGER BEFORE INSERT " +
                         "ON " + sourceTable + " FOR EACH ROW BEGIN INSERT " +
                         "INTO " +
-                        sourceTable + "_SYNC(" + primeryCol + ") " +
-                        "VALUES(NEW." + primeryCol + "); " +
+                        sourceTable + "_SYNC(" + syncColumns + ") " +
+                        "VALUES(" + syncValueColumns + "); " +
                         "END;";
                 preparedStatement = dbConnection.prepareStatement(query);
                 preparedStatement.execute();
@@ -309,8 +328,8 @@ public class Runner {
                 query = "CREATE TRIGGER " + table + "_SYNC_UPDATE_TRIGGER BEFORE UPDATE " +
                         "ON " + sourceTable + " FOR EACH ROW BEGIN INSERT " +
                         "INTO " +
-                        sourceTable + "_SYNC(" + primeryCol + ") " +
-                        "VALUES(NEW." + primeryCol + "); " +
+                        sourceTable + "_SYNC(" + syncColumns + ") " +
+                        "VALUES(" + syncValueColumns + "); " +
                         "END;";
                 preparedStatement = dbConnection.prepareStatement(query);
                 preparedStatement.execute();
